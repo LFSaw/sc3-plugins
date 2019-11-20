@@ -1,4 +1,4 @@
-TITLE:: BBlockerBuf
+TITLE:: BBlockerNormBuf
 summary:: MultiOut BetaBlocker VChip
 categories:: UGens
 related:: Classes/BBlockerBuf, Classes/BBlockerProgram
@@ -6,6 +6,10 @@ related:: Classes/BBlockerBuf, Classes/BBlockerProgram
 DESCRIPTION::
 BetaBlocker virtual chip implementation. The heap is realised as a Buffer and can possibly be shared with other instances.
 It triggers the computation of the underlying BetaBlocker engine at a given rate and returns an array consisting of the program counter and all 8 stack elements re-scaled to values between -1 and 1.
+
+note::
+This version assumes the buffer values to be between -1 and 1. For an implementation with integer values (to use with link::Classes/BBlockerProgram::, see link::Classes/BBlockerBuf::). 
+::
 
 code::
 (
@@ -17,7 +21,7 @@ code::
 	// create program
 	var program = BBlockerProgram([\ORG, \INC, \INC, \INC, \DUP, \INC, \JMP, 1]).asLocalBuf;
 
-	# pC ... stack = BBlockerBuf.ar(
+	# pC ... stack = BBlockerNormBuf.ar(
 		freq: MouseX.kr(1000, 20000, -2),
 		bufnum: program,
 		startpoint: 0

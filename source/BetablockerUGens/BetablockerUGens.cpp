@@ -43,6 +43,28 @@ void DetaBlockerBuf_Ctor(DetaBlockerBuf *unit);
 void DetaBlockerBuf_Dtor(DetaBlockerBuf *unit);
 void DetaBlockerBuf_next(DetaBlockerBuf *unit, int inNumSamples);
 
+//////////////////////////////////// Helper //////////////////////////
+
+static inline bool bbcheckBuffer(Unit * unit, const float * bufData, uint32 bufChannels, uint32 expectedChannels, int inNumSamples) {
+	if (!bufData){
+		goto handle_failure;
+	}
+	if (expectedChannels > bufChannels) {
+		if(unit->mWorld->mVerbosity > -1 && !unit->mDone){
+			Print("Buffer UGen channel mismatch: expected %i, yet buffer has %i channels\n",
+				  expectedChannels, bufChannels);
+		}
+		goto handle_failure;
+	}
+	return true;
+
+handle_failure:
+	unit->mDone = true;
+	ClearUnitOutputs(unit, inNumSamples);
+	return false;
+}
+
+
 //////////////// DetaBlockerBuf //////////////////////////////////////////////
 
 
@@ -179,27 +201,6 @@ void BBlockerBuf_Dtor(BBlockerBuf *unit)
 	unit->~BBlockerBuf();
 	
 }
-
-static inline bool bbcheckBuffer(Unit * unit, const float * bufData, uint32 bufChannels, uint32 expectedChannels, int inNumSamples) {
-	if (!bufData){
-		goto handle_failure;
-	}
-	if (expectedChannels > bufChannels) {
-		if(unit->mWorld->mVerbosity > -1 && !unit->mDone){
-			Print("Buffer UGen channel mismatch: expected %i, yet buffer has %i channels\n",
-				  expectedChannels, bufChannels);
-		}
-		goto handle_failure;
-	}
-	return true;
-
-handle_failure:
-	unit->mDone = true;
-	ClearUnitOutputs(unit, inNumSamples);
-	return false;
-}
-
-
 
 void BBlockerBuf_next_i(BBlockerBuf *unit, int inNumSamples) {
 	// buffer access
@@ -398,6 +399,282 @@ void BBlockerBuf_next_k (BBlockerBuf *unit, int inNumSamples) {
 } // end BBlockerBuf_next_k
 
 
+/////////// BBlockerNormBuf ///////////////////
+
+struct BBlockerNormBuf : public Unit
+{
+	BBlockerNormBuf(void) : bblocker()
+		{}
+
+	~BBlockerNormBuf(void)
+		{}
+
+	machine bblocker;
+
+	
+	float  m_fbufnum;
+	double m_phase;
+	float  m_freqMul;
+	float  m_lastFreq;
+	float  m_mul;
+	float  m_add;
+	SndBuf *m_buf;
+};
+
+void BBlockerNormBuf_Ctor(BBlockerNormBuf *unit);
+void BBlockerNormBuf_Dtor(BBlockerNormBuf *unit);
+void BBlockerNormBuf_next_i(BBlockerNormBuf *unit, int inNumSamples);
+void BBlockerNormBuf_next_a(BBlockerNormBuf *unit, int inNumSamples);
+void BBlockerNormBuf_next_k(BBlockerNormBuf *unit, int inNumSamples);
+
+
+void BBlockerNormBuf_Ctor(BBlockerNormBuf *unit)
+{
+	new(unit) BBlockerNormBuf();
+	unit->bblocker.init_thread(0);
+
+	unit->m_fbufnum = -1e9f;
+	unit->m_phase = 1.f; // not program counter... this is the phase used to determine computation time
+	unit->m_freqMul = unit->mRate->mSampleDur;
+	unit->m_lastFreq = ZIN0(1);
+	unit->m_mul = 12;
+	unit->m_add = 13;
+	
+	// TODO: set initial start adress
+
+	// SETCALC(BBlockerNormBuf_next_a);
+	if(INRATE(1) == calc_ScalarRate) { // freq is not a scalar
+// printf("freq is SCALAR     : %d\n", INRATE(1));
+		SETCALC(BBlockerNormBuf_next_i);
+		BBlockerNormBuf_next_i(unit, 1);
+	} else if (INRATE(1) == calc_FullRate) {
+// printf("freq is FULLRATE   : %d\n", INRATE(1));
+		SETCALC(BBlockerNormBuf_next_a);
+		BBlockerNormBuf_next_a(unit, 1);
+	} else {
+// printf("freq is CONTROLRATE: %d\n", INRATE(1));
+		SETCALC(BBlockerNormBuf_next_k);
+		BBlockerNormBuf_next_k(unit, 1);
+	}
+
+//	OUT0(0) = 0.f;
+}
+
+void BBlockerNormBuf_Dtor(BBlockerNormBuf *unit)
+{
+	unit->~BBlockerNormBuf();
+	
+}
+
+void BBlockerNormBuf_next_i(BBlockerNormBuf *unit, int inNumSamples) {
+	// buffer access
+	GET_BUF
+	uint32 numInputChannels = 1; // input should be one channel.
+	if (!bbcheckBuffer(unit, bufData, bufChannels, numInputChannels, inNumSamples))
+		return;
+
+	// get info from unit
+	machine &m = unit->bblocker;
+	// thread  t  = m.get_thread();
+
+	float *pCOut       = ZOUT(0);
+
+	float *stackOut0  = ZOUT(1);
+	float *stackOut1  = ZOUT(2);
+	float *stackOut2  = ZOUT(3);
+	float *stackOut3  = ZOUT(4);
+	float *stackOut4  = ZOUT(5);
+	float *stackOut5  = ZOUT(6);
+	float *stackOut6  = ZOUT(7);
+	float *stackOut7  = ZOUT(8);
+
+	float  freq    = ZIN0(1);
+	double phase   = unit->m_phase;
+	float  freqmul = unit->m_freqMul;
+
+	// get heap from buffer
+	/* 		Cast bufData (float()) to u8 and put it into machine's heap. 
+			For now, I assume the buffer to be HEAP_SIZE elements (i.e. 256). 
+			Buffer items should range between 0 and 255.	*/
+	for(size_t i = 0; i < HEAP_SIZE; i++) {
+		m.m_heap[i] = (u8) (bufData[i] * unit->m_mul + unit->m_add);
+
+		// keep rounding errors to add back later
+		bufData[i] = ((float) bufData[i]) - m.m_heap[i];
+	}
+
+	// compute samples
+	LOOP1(inNumSamples,
+		if (phase >= 1.f) {
+			//printf("running: %f (%e * %f)\n", phase, ZXP(freq), freqmul);
+			phase -= 1.f;
+			m.run();
+		}
+		phase += freq * freqmul;
+
+//		printf("1: %d  %d\n", m.get_thread().m_pc, m.get_thread().at(0));
+
+		// out must be written last for in place operation
+		ZXP(pCOut)     = ((float) m.get_thread().m_pc  / 127.f) - 1.f;
+		ZXP(stackOut0) = ((float) m.get_thread().at(0) / 127.f) - 1.f;
+		ZXP(stackOut1) = ((float) m.get_thread().at(1) / 127.f) - 1.f;
+		ZXP(stackOut2) = ((float) m.get_thread().at(2) / 127.f) - 1.f;
+		ZXP(stackOut3) = ((float) m.get_thread().at(3) / 127.f) - 1.f;
+		ZXP(stackOut4) = ((float) m.get_thread().at(4) / 127.f) - 1.f;
+		ZXP(stackOut5) = ((float) m.get_thread().at(5) / 127.f) - 1.f;
+		ZXP(stackOut6) = ((float) m.get_thread().at(6) / 127.f) - 1.f;
+		ZXP(stackOut7) = ((float) m.get_thread().at(7) / 127.f) - 1.f;
+	)
+
+	// write back to unit, resp. buffer
+	for(size_t i = 0; i < HEAP_SIZE; i++) {
+		// add rounding error collecgted when reading out buffer
+		bufData[i] =  bufData[i] + ((((float) m.m_heap[i]) - unit->m_add) / unit->m_mul);
+	}
+	unit->m_phase = phase;
+} // end BBlockerNormBuf_next_i
+
+void BBlockerNormBuf_next_a(BBlockerNormBuf *unit, int inNumSamples) {
+	// buffer access
+	GET_BUF
+	uint32 numInputChannels = 1; // input should be one channel.
+	if (!bbcheckBuffer(unit, bufData, bufChannels, numInputChannels, inNumSamples))
+		return;
+
+	// get info from unit
+	machine &m = unit->bblocker;
+	// thread  t  = m.get_thread();
+
+	float *pCOut       = ZOUT(0);
+
+	float *stackOut0  = ZOUT(1);
+	float *stackOut1  = ZOUT(2);
+	float *stackOut2  = ZOUT(3);
+	float *stackOut3  = ZOUT(4);
+	float *stackOut4  = ZOUT(5);
+	float *stackOut5  = ZOUT(6);
+	float *stackOut6  = ZOUT(7);
+	float *stackOut7  = ZOUT(8);
+
+	float *freq    = ZIN(1);
+	double phase   = unit->m_phase;
+	float freqmul  = unit->m_freqMul;
+
+	// get heap from buffer
+	/* 		Cast bufData (float()) to u8 and put it into machine's heap. 
+			For now, I assume the buffer to be HEAP_SIZE elements (i.e. 256). 
+			Buffer items should range between 0 and 255.	*/
+	for(size_t i = 0; i < HEAP_SIZE; i++) {
+		m.m_heap[i] = (u8) (bufData[i] * unit->m_mul + unit->m_add);
+
+		// keep rounding errors to add back later
+		bufData[i] = ((float) bufData[i]) - m.m_heap[i];
+	}
+
+	// compute samples
+	LOOP1(inNumSamples,
+		if (phase >= 1.f) {
+			phase -= 1.f;
+			m.run();
+		}
+		
+		phase += ZXP(freq) * freqmul;
+
+//		printf("1: %d  %d\n", m.get_thread().m_pc, m.get_thread().at(0));
+
+		// out must be written last for in place operation
+		ZXP(pCOut)     = ((float) m.get_thread().m_pc  / 127.f) - 1.f;
+		ZXP(stackOut0) = ((float) m.get_thread().at(0) / 127.f) - 1.f;
+		ZXP(stackOut1) = ((float) m.get_thread().at(1) / 127.f) - 1.f;
+		ZXP(stackOut2) = ((float) m.get_thread().at(2) / 127.f) - 1.f;
+		ZXP(stackOut3) = ((float) m.get_thread().at(3) / 127.f) - 1.f;
+		ZXP(stackOut4) = ((float) m.get_thread().at(4) / 127.f) - 1.f;
+		ZXP(stackOut5) = ((float) m.get_thread().at(5) / 127.f) - 1.f;
+		ZXP(stackOut6) = ((float) m.get_thread().at(6) / 127.f) - 1.f;
+		ZXP(stackOut7) = ((float) m.get_thread().at(7) / 127.f) - 1.f;
+	)
+
+	// write back to unit, resp. buffer
+	for(size_t i = 0; i < HEAP_SIZE; i++) {
+		// add rounding error collecgted when reading out buffer
+		bufData[i] =  bufData[i] + ((((float) m.m_heap[i]) - unit->m_add) / unit->m_mul);
+	}
+	unit->m_phase = phase;
+	
+} // end BBlockerNormBuf_next_a
+
+void BBlockerNormBuf_next_k (BBlockerNormBuf *unit, int inNumSamples) {
+	// buffer access
+	GET_BUF
+	uint32 numInputChannels = 1; // input should be one channel.
+	if (!bbcheckBuffer(unit, bufData, bufChannels, numInputChannels, inNumSamples))
+		return;
+
+	// get info from unit
+	machine &m = unit->bblocker;
+	// thread  t  = m.get_thread();
+
+	float *pCOut       = ZOUT(0);
+
+	float *stackOut0  = ZOUT(1);
+	float *stackOut1  = ZOUT(2);
+	float *stackOut2  = ZOUT(3);
+	float *stackOut3  = ZOUT(4);
+	float *stackOut4  = ZOUT(5);
+	float *stackOut5  = ZOUT(6);
+	float *stackOut6  = ZOUT(7);
+	float *stackOut7  = ZOUT(8);
+
+	float freq     = ZIN0(1);
+	float lastFreq = unit->m_lastFreq;
+	float freqmul  = unit->m_freqMul;
+	double phase   = unit->m_phase;
+
+	// get heap from buffer
+	/* 		Cast bufData (float()) to u8 and put it into machine's heap. 
+			For now, I assume the buffer to be HEAP_SIZE elements (i.e. 256). 
+			Buffer items should range between 0 and 255.	*/
+	for(size_t i = 0; i < HEAP_SIZE; i++) {
+		m.m_heap[i] = (u8) (bufData[i] * unit->m_mul + unit->m_add);
+
+		// keep rounding errors to add back later
+		bufData[i] = bufData[i] - ((((float) m.m_heap[i]) - unit->m_add) / unit->m_mul);
+	}
+
+	// compute samples
+	LOOP1(inNumSamples,
+		if (phase >= 1.f) {
+			//printf("running: %f (%e * %f)\n", phase, ZXP(freq), freqmul);
+			phase -= 1.f;
+			m.run();
+		}
+		float freqslope  = CALCSLOPE(freq, lastFreq);
+		phase += (freq+freqslope) * freqmul;
+
+//		printf("1: %d  %d\n", m.get_thread().m_pc, m.get_thread().at(0));
+
+		// out must be written last for in place operation
+		ZXP(pCOut)     = ((float) m.get_thread().m_pc  / 127.f) - 1.f;
+		ZXP(stackOut0) = ((float) m.get_thread().at(0) / 127.f) - 1.f;
+		ZXP(stackOut1) = ((float) m.get_thread().at(1) / 127.f) - 1.f;
+		ZXP(stackOut2) = ((float) m.get_thread().at(2) / 127.f) - 1.f;
+		ZXP(stackOut3) = ((float) m.get_thread().at(3) / 127.f) - 1.f;
+		ZXP(stackOut4) = ((float) m.get_thread().at(4) / 127.f) - 1.f;
+		ZXP(stackOut5) = ((float) m.get_thread().at(5) / 127.f) - 1.f;
+		ZXP(stackOut6) = ((float) m.get_thread().at(6) / 127.f) - 1.f;
+		ZXP(stackOut7) = ((float) m.get_thread().at(7) / 127.f) - 1.f;
+	)
+
+	// write back to unit, resp. buffer
+	for(size_t i = 0; i < HEAP_SIZE; i++) {
+		// add rounding error collecgted when reading out buffer
+		bufData[i] =  bufData[i] + ((((float) m.m_heap[i]) - unit->m_add) / unit->m_mul);
+	}
+	unit->m_phase = phase;
+	
+} // end BBlockerNormBuf_next_k
+
+
 
 //////////////////////////////
 
@@ -408,4 +685,5 @@ PluginLoad(Betablocker)
 	ft = inTable; // store pointer to InterfaceTable
 	DefineDtorUnit(DetaBlockerBuf);
 	DefineDtorUnit(BBlockerBuf);
+	DefineDtorUnit(BBlockerNormBuf);
 }

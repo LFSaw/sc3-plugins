@@ -1,7 +1,7 @@
 TITLE:: BBlockerProgram
 summary:: Convenience class to create and store BetaBlocker programs
 categories:: Convenience
-related:: Classes/BBlockerBuf, Classes/BBlockerProgram
+related:: Classes/BBlockerBuf, Classes/DetaBlockerBuf
 
 DESCRIPTION::
 Convenience class to create and store assembly programs for the BetaBlocker VChip.

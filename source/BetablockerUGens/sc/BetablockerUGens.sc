@@ -6,7 +6,6 @@ DetaBlockerBuf : DUGen {
 
 BBlockerBuf : MultiOutUGen {
 	*ar { arg  freq, bufnum = 0, startpoint = 0;
- 		//arg freq = 440.0, iphase = 0.0;
 		^this.multiNew('audio', bufnum, freq, startpoint)
     }
 
@@ -16,6 +15,17 @@ BBlockerBuf : MultiOutUGen {
 	}
 }
 
+// buffer data expected to be between [-1,1], mapped to values between [0..25] (number of commands)
+BBlockerNormBuf : MultiOutUGen {
+	*ar { arg  freq, bufnum = 0, startpoint = 0;
+		^this.multiNew('audio', bufnum, freq, startpoint)
+    }
+
+	init { arg ... theInputs;
+		inputs = theInputs;
+		^this.initOutputs(9, rate);
+	}
+}
 
 // without mul and add.
 /*
