@@ -1,5 +1,5 @@
 BBlockerProgram {
-	classvar <instructions, descs;
+	classvar <instructions, descs, <addrRange = 256;
 	var <program, <>fillUpRandom = false;
 	var collection;
 
@@ -38,6 +38,12 @@ BBlockerProgram {
 		^descs;
 	}
 
+	compile {
+		^program.collect{|instr| this.pr_translate(instr)};
+	}
+	pr_fill {|data|
+		^(data ++ fillUpRandom.if({{addrRange.rand}!(addrRange - data.size)}, {0!(addrRange - data.size)}))
+	}
 	collection {|force = false|
 		var result;
 
@@ -46,33 +52,32 @@ BBlockerProgram {
 		};
 
 		collection.isNil.if{
-			result = program.collect{|instr| this.pr_translate(instr)};
-			collection = (result ++ fillUpRandom.if({{256.rand}!(256 - program.size)}, {0!(256 - program.size)}));
+			collection = this.pr_fill(this.compile);
 		}
 
 		^collection;
 	}
 
-	makeBuffer {|server, action|
+	makeBuffer {|server, action, force = false|
 		server = server ?? {Server.default};
-		^Buffer.loadCollection(server, this.collection, 1, action)
+		^Buffer.sendCollection(server, this.collection(false), 1, action: action)
 	}
 
-	asLocalBuf {
-		^LocalBuf.newFrom(this.collection)
+	asLocalBuf {|force = false|
+		^LocalBuf.newFrom(this.collection(false))
 	}
 
-	fillBuffer {|buffer|
-		buffer.loadCollection(this.collection);
+	fillBuffer {|buffer, force = false|
+		buffer.sendCollection(this.collection(force));
 	}
 
 	decompile {|force = false|
 		this.collection(force);
-		^(collection.collect{|val| this.pr_rTranslate(val)})
+		^this.class.new(collection.collect{|val| this.pr_rTranslate(val)})
 	}
 
 	pr_translate {|val|
-		^(this.class.instructions[val] ?? {val%256})
+		^(this.class.instructions[val] ?? {val%addrRange})
 	}
 
 	pr_rTranslate {|val|
@@ -192,6 +197,10 @@ BBlockerProgram {
 
 	scope {|rate = 20000, using, leak = false, vol = 0.1, force = true| // using is either Server or Buffer
 		^this.ar(rate, using, leak, vol, force).scope
+	}
+
+	storeOn { | stream |
+		stream << this.class.name << "(" << this.program.asCompileString << ")" << ".fillUpRandom_(" << this.fillUpRandom << ")" ;
 	}
 }
 

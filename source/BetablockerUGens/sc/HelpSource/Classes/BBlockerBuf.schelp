@@ -1,7 +1,7 @@
 TITLE:: BBlockerBuf
 summary:: MultiOut BetaBlocker VChip
 categories:: UGens
-related:: Classes/BBlockerBuf, Classes/BBlockerProgram
+related:: Classes/DetaBlockerBuf, Classes/BBlockerProgram
 
 DESCRIPTION::
 BetaBlocker virtual chip implementation. The heap is realised as a Buffer and can possibly be shared with other instances.
